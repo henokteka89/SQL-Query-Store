@@ -1,0 +1,113 @@
+USE ADMIN;
+GO 
+
+CREATE OR ALTER PROC sp_analyze_querystore 
+(@numdays int = 30, @databasename Nvarchar(50) = 'DBAUtil')
+As
+/* -- Testing
+Declare @numdays int = 30
+Declare @databasename Nvarchar(50) = 'DBAUtil'
+*/
+Declare @SQL Nvarchar(max) 
+
+set @SQL = '
+
+DECLARE @start_time DateTIMEOFFSET(7) =  CAST(DateADD(day, ' + convert(varchar(10), -@numdays) + ', SYSDateTIMEOFFSET()) AS Datetimeoffset(7))
+DECLARE @end_time DateTIMEOFFSET(7)   =  CAST(DateADD(day, -1, SYSDateTIMEOFFSET()) AS Datetimeoffset(7))
+
+SELECT
+            @start_time [start_time],
+            @end_time [end_time],
+            p.query_id query_id,    
+            q.object_id object_id,      
+            OBJECT_NAME(q.object_id) [object_name],
+            qt.query_sql_text query_sql_text,    
+            ROUND(CONVERT(float, SUM(rs.avg_duration * rs.count_executions)) / (SUM(rs.count_executions)) * 0.001,2) [avg duration],
+            ROUND(CONVERT(float, SUM(rs.avg_cpu_time * rs.count_executions)) / (SUM(rs.count_executions)) * 0.001 ,2) [avg cpu time],
+            ROUND(CONVERT(float, SUM(rs.avg_logical_io_writes * rs.count_executions)) / (SUM(rs.count_executions)) * 8 ,2) [avg logical writes],
+            ROUND(CONVERT(float, SUM(rs.avg_logical_io_reads * rs.count_executions)) / (SUM(rs.count_executions)) * 8 ,2) [avg logical reads],
+            ROUND(CONVERT(float, SUM(rs.avg_physical_io_reads * rs.count_executions)) / (SUM(rs.count_executions)) * 8,2) [avg physical reads],    
+            ROUND(CONVERT(float, SUM(rs.avg_clr_time * rs.count_executions)) / (SUM(rs.count_executions)) * 0.001,2) [avg clr time],
+            ROUND(CONVERT(float, SUM(rs.avg_dop * rs.count_executions)) / (SUM(rs.count_executions)) * 1,0) [avg dop],    
+            ROUND(CONVERT(float, SUM(rs.avg_query_max_used_memory * rs.count_executions)) / (SUM(rs.count_executions)) * 8,2) [avg memory consumption],
+            ROUND(CONVERT(float, SUM(rs.avg_rowcount * rs.count_executions)) / (SUM(rs.count_executions)) ,0) [avg row count],
+            ROUND(CONVERT(float, SUM(rs.avg_log_bytes_used * rs.count_executions)) / (SUM(rs.count_executions)) * 0.0009765625,2) [avg log memory used],
+            ROUND(CONVERT(float, SUM(rs.avg_duration*rs.count_executions)) * 0.001,2) [total duration],      
+            ROUND(CONVERT(float, SUM(rs.avg_cpu_time*rs.count_executions)) * 0.001,2) [total cpu time],    
+            ROUND(CONVERT(float, SUM(rs.avg_logical_io_reads*rs.count_executions)) * 8,2) [total logical reads],      
+            ROUND(CONVERT(float, SUM(rs.avg_logical_io_writes*rs.count_executions)) * 8,2) [total logical writes],      
+            ROUND(CONVERT(float, SUM(rs.avg_physical_io_reads*rs.count_executions)) * 8,2) [total physical reads],    
+            ROUND(CONVERT(float, SUM(rs.avg_clr_time*rs.count_executions)) * 0.001,2) [total clr time],    
+            ROUND(CONVERT(float, SUM(rs.avg_dop*rs.count_executions)) * 1,0) [total dop],      
+            ROUND(CONVERT(float, SUM(rs.avg_query_max_used_memory*rs.count_executions)) * 8,2) [total memory consumption],      
+            ROUND(CONVERT(float, SUM(rs.avg_rowcount*rs.count_executions)) * 1,0) [total row count],      
+            ROUND(CONVERT(float, SUM(rs.avg_log_bytes_used*rs.count_executions)) * 0.0009765625,2) [total log memory used],      
+            ROUND(CONVERT(float, SUM(rs.avg_tempdb_space_used*rs.count_executions)) * 8,2) [total tempdb memory used],  
+            SUM(rs.count_executions) [execution count],      
+            COUNT(distinct p.plan_id) num_plans  
+          FROM ' + @databasename+'.sys.query_store_runtime_stats rs 
+			   INNER JOIN ' + @databasename+'.sys.query_store_plan p ON p.plan_id = rs.plan_id 
+			   INNER JOIN ' + @databasename+'.sys.query_store_query q ON q.query_id = p.query_id 
+			   INNER JOIN ' + @databasename+'.sys.query_store_query_text qt ON q.query_text_id = qt.query_text_id  
+          WHERE
+            NOT (rs.last_execution_time < @start_time OR rs.first_execution_time > @end_time)
+          GROUP BY
+            p.query_id,
+            qt.query_sql_text,
+            q.object_id
+OPTION (RECOMPILE)'
+
+Exec sp_executesql @SQL
+--Print @sql
+
+-- CREATE TABLE TO STORE THE QUERY STORE DATA FOR ANALYSIS
+USE ADMIN 
+
+CREATE TABLE  querystoredata
+(
+[start_time]				Datetimeoffset(7)
+,[end_time]					Datetimeoffset(7)
+,[query_id]					Bigint
+,[object_id]				Bigint
+,[object_name]				Nvarchar(120)
+,[query_sql_text]			Nvarchar(max)
+,[avg duration]				Real
+,[avg cpu time]				Real
+,[avg logical writes]		Real
+,[avg logical reads]		Real
+,[avg physical reads]		Real
+,[avg clr time]				Real
+,[avg dop]					Real
+,[avg memory consumption]	Real
+,[avg row count]			Real
+,[avg log memory used]		Real
+,[total duration]			Real
+,[total cpu time]			Real
+,[total logical reads]		Real
+,[total logical writes]		Real
+,[total physical reads]		Real
+,[total clr time]			Real
+,[total dop]				Real
+,[total memory consumption]	Real
+,[total row count]			Real
+,[total log memory used]	Real
+,[total tempdb memory used]	Real
+,[execution count]			Bigint
+,[num_plans]					Int
+)
+ 
+INSERT INTO [dbo].[querystoredata] ([start_time], [end_time], [query_id], [object_id], [object_name], [query_sql_text], [avg duration], [avg cpu time], [avg logical writes], [avg logical reads], [avg physical reads], [avg clr time], [avg dop], [avg memory consumption], [avg row count], [avg log memory used], [total duration], [total cpu time], [total logical reads], [total logical writes], [total physical reads], [total clr time], [total dop], [total memory consumption], [total row count], [total log memory used], [total tempdb memory used], [execution count], [num_plans]) 
+EXEC sp_analyze_querystore
+
+
+--ANALYSIS E.G. (MEMORY, CPU, PHYSICAL READ, LOGICAL READ, PLAN COUNT]
+-- ANalyse CPU_usage
+SELECT TOP 10 
+[query_sql_text] [Text], 
+Round([avg cpu time] / 1000, 1) CPU_sec, 
+Round([avg duration] / 1000, 1) Elaspsed_sec, 
+Round([avg logical reads],2) [avg logical reads]
+,Round([avg physical reads],2) [avg physical reads], 
+cast(Round([avg memory consumption],2) / 1024 /1024 as numeric (32)) as [MemoryGB]
+, [start_time], [end_time]
+FROM ADMIN.DBO.querystoredata  order by CPU_sec desc
