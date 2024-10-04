@@ -1,0 +1,40 @@
+SELECT TOP 1          qs.last_execution_time,          st.text AS ExecutedSQL      
+FROM sys.dm_exec_query_stats qs      
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st     
+WHERE 
+st.text LIKE '%SELECT p.Id, p.Title, p.CreationDate, u.DisplayName%'  -- the sql
+and st.text not like 'select top 1%' --this session 
+ORDER BY qs.last_execution_time DESC;   
+
+
+For longer text 
+
+-- Create the Extended Events session
+CREATE EVENT SESSION [CaptureLongSQLText]
+ON SERVER
+ADD EVENT sqlserver.sql_statement_completed(
+    ACTION(sqlserver.sql_text, sqlserver.session_id)
+    WHERE ([sqlserver].[database_name] = N'YourDatabaseName'))
+ADD TARGET package0.event_file(SET filename=N'C:\SQLServerXE\LongSQLText.xel');
+GO
+-- Start the session
+ALTER EVENT SESSION [CaptureLongSQLText] ON SERVER STATE = START;
+GO
+
+-- Stop the session after capturing the necessary data
+ALTER EVENT SESSION [CaptureLongSQLText] ON SERVER STATE = STOP;
+GO
+
+-- Query the captured events
+SELECT
+    event_data.value('(event/@name)[1]', 'varchar(50)') AS EventName,
+    event_data.value('(event/@timestamp)[1]', 'datetime2') AS [Time],
+    event_data.value('(event/action[@name="session_id"]/value)[1]', 'int') AS SessionID,
+    event_data.value('(event/data[@name="statement"]/value)[1]', 'nvarchar(max)') AS SQLText
+FROM
+(
+    SELECT CAST(event_data AS XML) AS event_data
+    FROM sys.fn_xe_file_target_read_file('C:\SQLServerXE\LongSQLText*.xel', NULL, NULL, NULL)
+) AS ev;
+GO
+
