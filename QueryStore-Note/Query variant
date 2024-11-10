@@ -1,0 +1,11 @@
+-- You want to delete a query id and sql server says you can't because it has variant
+
+SELECT
+    qsq.query_id AS ParentQueryID,
+    qsqv.query_variant_query_id AS VariantQueryID
+FROM
+    sys.query_store_query qsq
+INNER JOIN
+    sys.query_store_query_variant qsqv ON qsq.query_id = qsqv.parent_query_id
+WHERE
+    qsq.query_id = @YourQueryID; --replace the query id
