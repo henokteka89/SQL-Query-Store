@@ -1,0 +1,75 @@
+Create or Alter Function dbo.ufn_getplansbyname
+(@proclist Nvarchar(max)
+)
+Returns Table
+AS Return
+
+/*
+-- Make sure to change the database names below to the dbname you wanted or the procs exist
+--Can be deployed to admin or master database, not necessarily on the main database
+-- Sample Call
+select *, 'EXEC sp_query_store_remove_plan ' + convert(varchar, plan_id) removecmd
+from admin.dbo.ufn_getplansbyname (
+'
+usp_abc
+usp_cde
+usp_fgh
+'
+)
+Order By avg_duration_ms DESC
+
+*/
+
+With Normalized as (
+select list = replace(replace(replace(replace(replace(@proclist, 
+char(13)+char(10), ','), 
+char(13), ','),
+char(10), ','),
+';', ','),
+char(9), ' ')
+), 
+INPUTNames AS (
+Select ProcName = Ltrim(RTRIM(replace(replace(replace(replace(value, '''',''), ' '' ', ''), '[',''), ']','')))
+from Normalized n
+Cross Apply string_split(n.list, ',')
+Where value IS NOT NULL AND LTRIM(RTRIM(VALUE)) <> ''
+),
+ProcTargets AS 
+(
+select p.object_id, 
+procshort = p.name, 
+proc2part = s.name + '.' + p.name,
+proc2partQ = QUOTENAME(s.name) + '.' + QUOTENAME(p.name)
+from admin.sys.procedures p
+JOIN admin.sys.schemas s on s.schema_id = p.schema_id
+), 
+Chosen AS
+(
+Select distinct 
+pt.object_id, 
+procedurename = pt.proc2partQ
+from inputnames i 
+join proctargets pt on i.procname = pt.procshort or i.procname = pt.proc2part or i.procname = pt.proc2partQ
+), 
+Planagg AS 
+(
+select c.procedurename, qs.object_id, qs.query_id, qp.plan_id, qp.last_execution_time, 
+avg_duration_ms = round(avg(rs.avg_duration) / 1000.0,1)
+from chosen c
+join admin.sys.query_store_query qs on qs.object_id = c.object_id
+join admin.sys.query_store_plan qp on qp.query_id = qs.query_id
+join admin.sys.query_store_runtime_stats rs on rs.plan_id = qp.plan_id
+join admin.sys.query_store_runtime_stats_interval rsi on rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+where rsi.end_time >= dateadd(hour, -3, sysutcdatetime()) --3 hours
+group by c.procedurename, qs.object_id, qs.query_id, qp.plan_id, qp.last_execution_time
+),
+Ranked AS 
+(
+select *, rn = row_number() over 
+( partition by object_id order by last_execution_time desc, plan_id desc )
+From planagg
+)
+select procedurename, query_id, plan_id, last_execution_time, avg_duration_ms 
+from ranked 
+where rn =1
+go
