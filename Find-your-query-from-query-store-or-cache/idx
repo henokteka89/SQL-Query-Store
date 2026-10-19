@@ -1,0 +1,25 @@
+WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
+SELECT
+    DB_NAME(qp.dbid)                                   AS db_name,
+    OBJECT_SCHEMA_NAME(qp.objectid, qp.dbid) + '.' +
+    OBJECT_NAME(qp.objectid, qp.dbid)                  AS proc_name,   -- NULL = ad hoc / prepared
+    cp.objtype,                                        -- Proc, Adhoc, Prepared
+    cp.usecounts,
+    s.stmt.value('@StatementType', 'varchar(50)')      AS statement_type,
+    s.stmt.value('@StatementText', 'nvarchar(max)')    AS statement_text,
+    qp.query_plan
+FROM sys.dm_exec_cached_plans AS cp
+CROSS APPLY sys.dm_exec_query_plan(cp.plan_handle) AS qp
+CROSS APPLY qp.query_plan.nodes('//StmtSimple') AS s(stmt)
+WHERE CONVERT(nvarchar(max), qp.query_plan) LIKE N'%idx_collectiondate%'          -- cheap prefilter
+  AND s.stmt.exist('.//RelOp[@PhysicalOp="Index Seek"]
+                      /IndexScan/Object[@Index="[idx_collectiondate]"]') = 1
+ORDER BY cp.usecounts DESC;
+
+SELECT OBJECT_NAME(q.object_id) AS proc_name,   -- NULL = ad hoc
+       qt.query_sql_text, p.plan_id, p.last_execution_time
+FROM sys.query_store_plan p
+JOIN sys.query_store_query q       ON q.query_id = p.query_id
+JOIN sys.query_store_query_text qt ON qt.query_text_id = q.query_text_id
+WHERE p.query_plan LIKE N'%Index Seek%'
+  AND p.query_plan LIKE N'%Index="[[]idx_collectiondate]"%';
