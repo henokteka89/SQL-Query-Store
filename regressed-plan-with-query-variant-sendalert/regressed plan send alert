@@ -1,0 +1,68 @@
+--Target: you have different plans because of PSP, you want to check if they are regressing. The 2nd cte check for variants. 
+
+-- Step 1: Declare and populate the result table
+DECLARE @Results TABLE (query_id INT, plan_id INT, average_runtime_mseconds DECIMAL(10,2), remove_statement NVARCHAR(200));
+WITH RankedPlans AS (
+    SELECT 
+        p.query_id, p.plan_id,
+        ROUND(AVG(rs.avg_duration / 1000.0), 2) AS average_runtime_mseconds,
+        ROW_NUMBER() OVER (PARTITION BY p.query_id ORDER BY p.plan_id DESC) AS rn
+    FROM sys.query_store_plan AS p
+    JOIN sys.query_store_runtime_stats AS rs ON p.plan_id = rs.plan_id
+    JOIN sys.query_store_query AS q ON p.query_id = q.query_id
+    JOIN sys.query_store_query_text AS qsq ON q.query_text_id = qsq.query_text_id
+    WHERE 
+        (qsq.query_sql_text LIKE '%SELECT Id, Title%' OR qsq.query_sql_text LIKE '%SELECT COUNT(*) AS RecordCount%')
+        AND qsq.query_sql_text NOT LIKE '%qsqt.query_id%'
+        AND qsq.query_sql_text NOT LIKE '%p.query_id%'
+    GROUP BY p.query_id, p.plan_id, qsq.query_sql_text
+),
+filtered AS (
+    SELECT DISTINCT qsqt.query_id
+    FROM sys.query_store_query_text qsq
+    JOIN sys.query_store_query qsqt ON qsq.query_text_id = qsqt.query_text_id
+    JOIN sys.query_store_plan qsp ON qsqt.query_id = qsp.query_id
+    JOIN sys.query_store_runtime_stats qsr ON qsp.plan_id = qsr.plan_id
+    WHERE 
+        (qsq.query_sql_text LIKE '%SELECT Id, Title%' OR qsq.query_sql_text LIKE '%SELECT COUNT(*) AS RecordCount%')
+        AND qsq.query_sql_text NOT LIKE '%qsqt.query_id%'
+    GROUP BY qsqt.query_id
+    HAVING COUNT(DISTINCT qsp.plan_id) > 1
+)
+INSERT INTO @Results
+SELECT rp.query_id, rp.plan_id, rp.average_runtime_mseconds, 
+    'EXEC sp_query_store_remove_plan ' + CONVERT(VARCHAR, rp.plan_id)
+FROM RankedPlans rp
+JOIN filtered f ON f.query_id = rp.query_id
+WHERE rn = 3 AND rp.average_runtime_mseconds > 800
+ORDER BY rp.average_runtime_mseconds DESC;
+
+select * from @Results
+-- Step 2: Build the HTML rows manually
+DECLARE @tableRows NVARCHAR(MAX) = N'';
+
+SELECT @tableRows = @tableRows + 
+    N'<tr>' +
+        N'<td>' + CAST(query_id AS NVARCHAR) + '</td>' +
+        N'<td>' + CAST(plan_id AS NVARCHAR) + '</td>' +
+        N'<td>' + CAST(average_runtime_mseconds AS NVARCHAR) + '</td>' +
+        N'<td>' + remove_statement + '</td>' +
+    N'</tr>'
+FROM @Results;
+
+-- Step 3: Wrap the rows in a full HTML table
+Declare @tableHTML  NVARCHAR(MAX)
+SET @tableHTML = 
+N'<H2>Query Store Plan Report</H2>' +
+N'<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">' +
+N'<tr style="background-color:#f2f2f2;"><th>Query ID</th><th>Plan ID</th><th>Avg Runtime (ms)</th><th>Remove Statement</th></tr>' +
+@tableRows +
+N'</table>';
+
+-- Step 4: Send the email
+EXEC msdb.dbo.sp_send_dbmail
+    @profile_name = 'default',
+    @recipients = 'hk@xx.com',
+    @subject = 'Query Store Plan Report',
+    @body = @tableHTML,
+    @body_format = 'HTML';
