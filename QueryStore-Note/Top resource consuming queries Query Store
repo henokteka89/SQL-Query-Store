@@ -1,0 +1,46 @@
+DECLARE @ResultRowCount INT = 25;
+
+DECLARE @IntervalStartTime DATETIMEOFFSET(7) = '2025-01-01 00:00:00 +00:00';
+DECLARE @IntervalEndTime   DATETIMEOFFSET(7) = '2025-01-31 23:59:59 +00:00';
+
+;WITH RS AS
+(
+    SELECT
+        P.query_id,
+        SUM(RS.avg_duration * RS.count_executions) AS TotalDuration,
+        COUNT(DISTINCT P.plan_id) AS NumPlans,
+        SUM(RS.count_executions) AS CountExecutions
+    FROM sys.query_store_runtime_stats RS
+    INNER JOIN sys.query_store_plan P
+        ON P.plan_id = RS.plan_id
+    WHERE RS.last_execution_time >= @IntervalStartTime
+      AND RS.first_execution_time <= @IntervalEndTime
+    GROUP BY P.query_id
+),
+XX AS
+(
+    SELECT TOP (@ResultRowCount)
+        R.query_id,
+        Q.object_id,
+        ISNULL(OBJECT_NAME(Q.object_id), '') AS ObjectName,
+        QT.query_sql_text,
+        ROUND(CONVERT(FLOAT, R.TotalDuration) * 0.001, 2) AS TotalDurationMS,
+        R.CountExecutions,
+        R.NumPlans
+    FROM RS R
+    INNER JOIN sys.query_store_query Q
+        ON Q.query_id = R.query_id
+    INNER JOIN sys.query_store_query_text QT
+        ON QT.query_text_id = Q.query_text_id
+    ORDER BY R.TotalDuration DESC
+)
+SELECT *,
+       CONCAT(
+            CAST(TotalDurationMS / 86400000 AS BIGINT), 'd:',
+            RIGHT('00' + CAST((CAST(TotalDurationMS AS BIGINT) % 86400000) / 3600000 AS VARCHAR(2)), 2), 'hr:',
+            RIGHT('00' + CAST((CAST(TotalDurationMS AS BIGINT) % 3600000) / 60000 AS VARCHAR(2)), 2), 'm:',
+            RIGHT('00' + CAST((CAST(TotalDurationMS AS BIGINT) % 60000) / 1000 AS VARCHAR(2)), 2), 's:',
+            RIGHT('000' + CAST(CAST(TotalDurationMS AS BIGINT) % 1000 AS VARCHAR(3)), 3), 'ms'
+       ) AS TotalDurationFormatted
+FROM XX
+OPTION (NO_PERFORMANCE_SPOOL);

@@ -1,0 +1,38 @@
+WITH hist AS (
+    SELECT q.query_id,
+           q.query_hash,
+           MAX(rs.max_duration) AS MaxDuration
+    FROM sys.query_store_query q
+         INNER JOIN sys.query_store_plan p ON q.query_id = p.query_id
+         INNER JOIN sys.query_store_runtime_stats rs ON p.plan_id = rs.plan_id
+         INNER JOIN sys.query_store_runtime_stats_interval rsi ON rs.runtime_stats_interval_id = rsi.runtime_stats_interval_id
+    WHERE start_time < DATEADD(HOUR, -1, GETDATE())
+    GROUP BY q.query_id, q.query_hash
+),
+recent AS (
+    SELECT q.query_id,
+           q.query_hash,
+           MAX(rs.max_duration) AS MaxDuration
+    FROM sys.query_store_query q
+         INNER JOIN sys.query_store_plan p ON q.query_id = p.query_id
+         INNER JOIN sys.query_store_runtime_stats rs ON p.plan_id = rs.plan_id
+         INNER JOIN sys.query_store_runtime_stats_interval rsi ON rs.runtime_stats_interval_id = rsi.runtime_stats_interval_id
+    WHERE start_time > DATEADD(HOUR, -1, GETDATE())
+    GROUP BY q.query_id, q.query_hash
+),
+regressed_queries AS (
+    SELECT hist.query_id,
+           hist.query_hash
+    FROM hist
+    INNER JOIN recent ON hist.query_id = recent.query_id
+    WHERE recent.MaxDuration > 1.2 * hist.MaxDuration
+)
+SELECT st.text,
+       OBJECT_NAME(st.objectid) AS ObjectName,
+       qs.last_execution_time,
+       qps.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+OUTER APPLY sys.dm_exec_query_plan_stats(qs.plan_handle) qps
+WHERE query_hash IN (SELECT query_hash FROM regressed_queries);
+This sample identifies queries that have regressed in the last hour (recent runtime is more than 20% higher than historical), then retrieves their last known actual query plans.
