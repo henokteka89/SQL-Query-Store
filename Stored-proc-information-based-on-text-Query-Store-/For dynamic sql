@@ -1,0 +1,20 @@
+DECLARE @text NVARCHAR(MAX) = '%SELECT%FROM%YourTable%' -- Replace with your stored procedure or dynamic SQL snippet
+
+SELECT
+    qsq.query_id,
+    qsqt.query_sql_text,
+    qsq.last_execution_time,
+    AVG(qsrs.avg_duration) / 1000000 AS avg_execution_time_s,
+    MAX(qsrs.max_duration) / 1000000 AS max_execution_time_s,
+    SUM(qsrs.execution_count) AS execution_count
+FROM
+    sys.query_store_query qsq
+    INNER JOIN sys.query_store_query_text qsqt ON qsq.query_text_id = qsqt.query_text_id
+    INNER JOIN sys.query_store_runtime_stats qsrs ON qsq.last_execution_time = qsrs.last_execution_time
+    qsqt.query_sql_text LIKE @text
+GROUP BY
+    qsq.query_id,
+    qsqt.query_sql_text,
+    qsq.last_execution_time
+ORDER BY
+    avg_execution_time_s DESC;
